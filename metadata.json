@@ -1,0 +1,6 @@
+{
+  "name": "PhysioCase",
+  "description": "A calm, professional clinical workspace designed specifically for physiotherapists.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

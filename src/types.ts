@@ -260,6 +260,7 @@ export interface ClinicalProblem {
   archivedAt?: string;
   archivedBy?: AuditActor;
   archiveReason?: string;
+  version?: number;
 }
 
 // Stage 4A: Goals & Functional Outcomes Foundation (Problems → Goals)
@@ -303,6 +304,7 @@ export interface ClinicalGoal {
   archivedAt?: string;
   archivedBy?: AuditActor;
   archiveReason?: string;
+  version?: number;
 }
 
 // ==========================================

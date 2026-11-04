@@ -10,8 +10,18 @@ import type { AuthContext } from '../types/auth';
 import { AuthService } from '../auth/service';
 import { PatientService } from '../domain/patients/patient.service';
 import { CaseService } from '../domain/cases/case.service';
+import { SubjectiveAssessmentService } from '../domain/assessments/subjective.service';
+import { ObjectiveAssessmentService } from '../domain/assessments/objective.service';
+import { InvestigationService } from '../domain/investigations/investigation.service';
+import { ProblemService } from '../domain/problems/problem.service';
+import { GoalService } from '../domain/goals/goal.service';
 import { createPatientRouter } from './routes/patients';
 import { createCaseRouter } from './routes/cases';
+import { createSubjectiveRouter } from './routes/subjective';
+import { createObjectiveRouter } from './routes/objective';
+import { createInvestigationRouter } from './routes/investigations';
+import { createProblemRouter } from './routes/problems';
+import { createGoalRouter } from './routes/goals';
 import {
   resolveAuthContext,
   hasActiveMembership,
@@ -32,6 +42,11 @@ export function createApp(db: PGlite) {
   const authService = new AuthService(db);
   const patientService = new PatientService(db);
   const caseService = new CaseService(db);
+  const subjectiveService = new SubjectiveAssessmentService(db);
+  const objectiveService = new ObjectiveAssessmentService(db);
+  const investigationService = new InvestigationService(db);
+  const problemService = new ProblemService(db);
+  const goalService = new GoalService(db);
 
   app.use(express.json());
 
@@ -344,6 +359,23 @@ export function createApp(db: PGlite) {
   // --------------------------------------------------------------------------
   app.use('/api/patients', createPatientRouter(patientService, requireAuth));
   app.use('/api/cases', createCaseRouter(caseService, requireAuth));
+
+  // --------------------------------------------------------------------------
+  // B-4 DOMAIN ROUTES: SUBJECTIVE, OBJECTIVE, INVESTIGATIONS
+  // --------------------------------------------------------------------------
+  app.use('/api/cases/:caseId/subjective', createSubjectiveRouter(subjectiveService, requireAuth));
+  app.use('/api/cases/:caseId/objective', createObjectiveRouter(objectiveService, requireAuth));
+  app.use('/api/cases/:caseId/investigations', createInvestigationRouter(investigationService, requireAuth));
+
+  // --------------------------------------------------------------------------
+  // B-5 DOMAIN ROUTES: CLINICAL PROBLEMS
+  // --------------------------------------------------------------------------
+  app.use('/api/cases/:caseId/problems', createProblemRouter(problemService, requireAuth));
+
+  // --------------------------------------------------------------------------
+  // B-6 DOMAIN ROUTES: CLINICAL GOALS
+  // --------------------------------------------------------------------------
+  app.use('/api/cases/:caseId/goals', createGoalRouter(goalService, requireAuth));
 
   return app;
 }

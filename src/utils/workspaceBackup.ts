@@ -2,6 +2,7 @@ import {
   AuthoritativeWorkspaceDataset,
   PhysioCaseWorkspaceBackupEnvelope,
   WorkspaceBackupSummary,
+  WorkspaceBackupMetadata,
   BackupValidationResult,
   BackupValidationError,
   RestoreExecutionResult,
@@ -171,13 +172,27 @@ export function calculateWorkspaceSummary(dataset: AuthoritativeWorkspaceDataset
 }
 
 /**
+ * Returns the storage key for a collection, partitioned by workspace ID if provided.
+ */
+export function getWorkspaceStorageKey(
+  collectionName: keyof typeof WORKSPACE_STORAGE_KEYS,
+  workspaceId?: string | null
+): string {
+  if (!workspaceId) {
+    return WORKSPACE_STORAGE_KEYS[collectionName];
+  }
+  return `physiocase_ws_${workspaceId}_${collectionName}`;
+}
+
+/**
  * Creates the canonical backup envelope from an authoritative workspace dataset.
  * Checksum covers ONLY the recursively canonicalized dataset payload.
  */
 export async function createWorkspaceBackupEnvelope(
   dataset: AuthoritativeWorkspaceDataset,
   appVersion = '1.0.0',
-  schemaVersion?: '1.0' | '1.1'
+  schemaVersion?: '1.0' | '1.1',
+  workspaceMetadata?: WorkspaceBackupMetadata
 ): Promise<PhysioCaseWorkspaceBackupEnvelope> {
   const summary = calculateWorkspaceSummary(dataset);
   const now = new Date();
@@ -198,6 +213,7 @@ export async function createWorkspaceBackupEnvelope(
     applicationVersion: appVersion,
     backupId,
     exportedAt,
+    workspace: workspaceMetadata,
     integrity: {
       algorithm: 'SHA-256',
       checksum,
@@ -232,7 +248,10 @@ export function downloadWorkspaceBackupFile(envelope: PhysioCaseWorkspaceBackupE
  * Strict Pre-Restore Validation Pipeline (Tiers 1 through 8).
  * Pure, fail-closed validation. Catches syntax, format, checksum, structural, and referential errors.
  */
-export async function validateWorkspaceBackup(rawJson: string): Promise<BackupValidationResult> {
+export async function validateWorkspaceBackup(
+  rawJson: string,
+  targetWorkspaceId?: string
+): Promise<BackupValidationResult> {
   const errors: BackupValidationError[] = [];
   const warnings: string[] = [];
 
@@ -581,6 +600,20 @@ export async function validateWorkspaceBackup(rawJson: string): Promise<BackupVa
     }
   }
 
+  // Tier 9: Workspace ownership and provenance verification
+  if (targetWorkspaceId && parsed.workspace?.workspaceId) {
+    if (parsed.workspace.workspaceId !== targetWorkspaceId) {
+      errors.push({
+        code: 'ERR_WORKSPACE_MISMATCH',
+        message: `Workspace mismatch: This backup was exported from workspace "${parsed.workspace.workspaceName || parsed.workspace.workspaceId}", but current active workspace is "${targetWorkspaceId}". Restoring into a different workspace is prohibited to protect cross-practitioner tenant isolation.`,
+      });
+    }
+  } else if (targetWorkspaceId && !parsed.workspace?.workspaceId) {
+    warnings.push(
+      'Legacy backup without embedded workspace metadata. Restoring will import records into the active workspace.'
+    );
+  }
+
   const summary = calculateWorkspaceSummary(dataset);
 
   return {
@@ -614,7 +647,8 @@ export async function executeReplaceRestore(
   candidateEnvelope: PhysioCaseWorkspaceBackupEnvelope,
   activeDataset: AuthoritativeWorkspaceDataset,
   onRehydrate: (dataset: AuthoritativeWorkspaceDataset) => void,
-  storageOverride?: Storage
+  storageOverride?: Storage,
+  activeWorkspaceId?: string
 ): Promise<RestoreExecutionResult> {
   const targetStorage = storageOverride || (typeof window !== 'undefined' ? window.localStorage : undefined);
 
@@ -624,6 +658,12 @@ export async function executeReplaceRestore(
       error: 'LocalStorage persistence is not available in this environment.',
     };
   }
+
+  const resolveStorageKey = (collectionName: keyof typeof WORKSPACE_STORAGE_KEYS): string => {
+    return activeWorkspaceId
+      ? `physiocase_ws_${activeWorkspaceId}_${collectionName}`
+      : WORKSPACE_STORAGE_KEYS[collectionName];
+  };
 
   // 1. Pre-flight capacity check (~4.8MB safety limit)
   const candidateBytes = estimateStorageSizeBytes(candidateEnvelope.dataset);
@@ -705,7 +745,7 @@ export async function executeReplaceRestore(
   // 3. Sequential Commit
   try {
     for (const collectionName of collectionsToCommit) {
-      const storageKey = WORKSPACE_STORAGE_KEYS[collectionName];
+      const storageKey = resolveStorageKey(collectionName);
       const dataToPersist = (candidateDataset as any)[collectionName];
       targetStorage.setItem(storageKey, JSON.stringify(dataToPersist));
       writtenKeys.push(storageKey);
@@ -717,7 +757,7 @@ export async function executeReplaceRestore(
     let rollbackSuccess = false;
     try {
       for (const collectionName of collectionsToCommit) {
-        const storageKey = WORKSPACE_STORAGE_KEYS[collectionName];
+        const storageKey = resolveStorageKey(collectionName);
         const originalData = (rollbackSnapshot as any)[collectionName];
         targetStorage.setItem(storageKey, JSON.stringify(originalData));
       }
@@ -725,7 +765,7 @@ export async function executeReplaceRestore(
       // Verify rollback
       let allKeysRestored = true;
       for (const collectionName of collectionsToCommit) {
-        const storageKey = WORKSPACE_STORAGE_KEYS[collectionName];
+        const storageKey = resolveStorageKey(collectionName);
         if (targetStorage.getItem(storageKey) === null) {
           allKeysRestored = false;
           break;
@@ -763,12 +803,12 @@ export async function executeReplaceRestore(
 
   // 6. Post-Write Verification
   for (const collectionName of collectionsToCommit) {
-    const storageKey = WORKSPACE_STORAGE_KEYS[collectionName];
+    const storageKey = resolveStorageKey(collectionName);
     const item = targetStorage.getItem(storageKey);
     if (item === null) {
       // Trigger rollback if post-write read fails
       for (const col of collectionsToCommit) {
-        const k = WORKSPACE_STORAGE_KEYS[col];
+        const k = resolveStorageKey(col);
         targetStorage.setItem(k, JSON.stringify((rollbackSnapshot as any)[col]));
       }
       return {

@@ -71,6 +71,14 @@ export interface WorkspaceBackupSummary {
   totalEntityCount: number;
 }
 
+export interface WorkspaceBackupMetadata {
+  workspaceId?: string;
+  workspaceName?: string;
+  workspaceSlug?: string;
+  practitionerId?: string;
+  practitionerEmail?: string;
+}
+
 /**
  * Stage 13: Canonical Backup Envelope
  * Format discriminator: 'physiocase-workspace-backup'
@@ -83,6 +91,7 @@ export interface PhysioCaseWorkspaceBackupEnvelope {
   applicationVersion: string;
   backupId: string;
   exportedAt: string;
+  workspace?: WorkspaceBackupMetadata;
 
   integrity: {
     algorithm: 'SHA-256';
@@ -108,6 +117,7 @@ export type BackupValidationErrorCode =
   | 'ERR_DUPLICATE_ID'
   | 'ERR_ORPHAN_RECORD'
   | 'ERR_INVALID_AUDIT_EVENT'
+  | 'ERR_WORKSPACE_MISMATCH'
   | 'ERR_STORAGE_QUOTA';
 
 export interface BackupValidationError {

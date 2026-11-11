@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../common/Button';
 import { useClinical } from '../../context/ClinicalContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   calculateWorkspaceSummary,
   createWorkspaceBackupEnvelope,
@@ -34,6 +35,8 @@ import { formatClinicalDate } from '../../utils/clinicalFormatters';
 import { AuditHistoryDrawer } from '../audit/AuditHistoryDrawer';
 
 export const DataManagementSection: React.FC = () => {
+  const { workspace, user } = useAuth();
+  const activeWorkspaceId = workspace?.id;
   const {
     getAuthoritativeWorkspaceDataset,
     restoreWorkspaceDataset,
@@ -82,7 +85,19 @@ export const DataManagementSection: React.FC = () => {
     setIsExporting(true);
     setExportSuccessMessage(null);
     try {
-      const envelope = await createWorkspaceBackupEnvelope(activeDataset);
+      const envelope = await createWorkspaceBackupEnvelope(
+        activeDataset,
+        '1.0.0',
+        undefined,
+        workspace
+          ? {
+              workspaceId: workspace.id,
+              workspaceName: workspace.name,
+              workspaceSlug: workspace.slug,
+              practitionerEmail: user?.email,
+            }
+          : undefined
+      );
       downloadWorkspaceBackupFile(envelope);
       setExportSuccessMessage('Workspace backup generated and downloaded successfully.');
       setTimeout(() => setExportSuccessMessage(null), 5000);
@@ -106,7 +121,7 @@ export const DataManagementSection: React.FC = () => {
     try {
       const text = await file.text();
       setRawFileContent(text);
-      const result = await validateWorkspaceBackup(text);
+      const result = await validateWorkspaceBackup(text, activeWorkspaceId);
       setValidationResult(result);
     } catch (err: any) {
       setValidationResult({
@@ -136,7 +151,9 @@ export const DataManagementSection: React.FC = () => {
       activeDataset,
       (newDataset) => {
         restoreWorkspaceDataset(newDataset);
-      }
+      },
+      undefined,
+      activeWorkspaceId
     );
 
     setIsRestoring(false);

@@ -1,137 +1,242 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { User } from '../types';
+import type {
+  PractitionerIdentity,
+  WorkspaceSummary,
+  WorkspaceMembership,
+  WorkspaceRole,
+  RegisterOwnerRequest,
+} from '../types/auth';
+import { authApi, tokenStore, ApiError } from '../services/api';
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
+  practitioner: PractitionerIdentity | null;
+  workspace: WorkspaceSummary | null;
+  membership: WorkspaceMembership | null;
+  role: WorkspaceRole | null;
+  clinicalAuthorized: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string, remember: boolean) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
+  authError: string | null;
+  login: (email: string, password: string, remember?: boolean) => Promise<{ success: boolean; error?: string }>;
+  register: (req: RegisterOwnerRequest, remember?: boolean) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
   updateUser: (updatedData: Partial<User>) => void;
+  refreshSession: () => Promise<boolean>;
 }
-
-const STORAGE_KEY = 'physiocase_session_user';
-const REMEMBER_KEY = 'physiocase_remember_me';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-
-  useEffect(() => {
-    // Check local storage on mount for remembered session
-    try {
-      const savedUser = localStorage.getItem(STORAGE_KEY);
-      if (savedUser) {
-        setUser(JSON.parse(savedUser));
-      }
-    } catch (e) {
-      console.error('Failed to load session:', e);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const login = async (email: string, password: string, remember: boolean): Promise<{ success: boolean; error?: string }> => {
-    setIsLoading(true);
-
-    // Simulate realistic clinical authentication handshake
-    await new Promise((resolve) => setTimeout(resolve, 650));
-
-    const cleanEmail = email.trim();
-    if (!cleanEmail) {
-      setIsLoading(false);
-      return { success: false, error: 'Please enter your professional email address.' };
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
-      setIsLoading(false);
-      return { success: false, error: 'Please enter a valid clinical email address.' };
-    }
-
-    if (!password || password.length < 6) {
-      setIsLoading(false);
-      return { success: false, error: 'Password must be at least 6 characters.' };
-    }
-
-    // Derive display name from email address if signing in fresh
-    const namePart = cleanEmail.split('@')[0];
-    const formattedName = namePart
-      .split(/[._-]/)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ') || 'Clinician';
-
-    const initials = formattedName
-      .split(' ')
+function mapPractitionerToUser(p: PractitionerIdentity, ws?: WorkspaceSummary | null): User {
+  const initials = p.initials ||
+    p.name.split(' ')
       .slice(0, 2)
-      .map((n) => n[0])
+      .map((w) => w[0])
       .join('')
       .toUpperCase() || 'PT';
 
-    const authenticatedUser: User = {
-      id: 'usr_' + Date.now().toString(36),
-      name: formattedName.startsWith('Dr') ? formattedName : `Dr. ${formattedName}`,
-      email: cleanEmail,
-      title: 'Physiotherapist, MPT',
-      clinicName: 'Active Journey Physical Therapy',
-      registrationNumber: 'PT-782914',
-      initials: initials.length > 0 ? initials : 'PT',
+  return {
+    id: p.id,
+    name: p.name,
+    email: p.email,
+    title: p.title || 'Physiotherapist',
+    clinicName: p.clinic_name || ws?.name || 'Private Practice',
+    registrationNumber: p.registration_number || undefined,
+    initials,
+  };
+}
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [practitioner, setPractitioner] = useState<PractitionerIdentity | null>(null);
+  const [workspace, setWorkspace] = useState<WorkspaceSummary | null>(null);
+  const [membership, setMembership] = useState<WorkspaceMembership | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // Restore session on mount via refresh token
+  useEffect(() => {
+    let isMounted = true;
+
+    async function restoreSession() {
+      const storedRefreshToken = tokenStore.getRefreshToken();
+      if (!storedRefreshToken) {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const tokens = await authApi.refresh(storedRefreshToken);
+        tokenStore.setAccessToken(tokens.accessToken, tokens.expiresIn);
+        tokenStore.setRefreshToken(tokens.refreshToken);
+
+        const me = await authApi.getMe(tokens.accessToken);
+        if (isMounted) {
+          setPractitioner(me.practitioner);
+          setWorkspace(me.workspace);
+          setMembership(me.membership);
+          setUser(mapPractitionerToUser(me.practitioner, me.workspace));
+          setAuthError(null);
+        }
+      } catch (err: any) {
+        console.warn('Session restoration failed:', err.message);
+        tokenStore.clear();
+        if (isMounted) {
+          setPractitioner(null);
+          setWorkspace(null);
+          setMembership(null);
+          setUser(null);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    restoreSession();
+
+    return () => {
+      isMounted = false;
     };
+  }, []);
 
-    setUser(authenticatedUser);
+  const login = useCallback(
+    async (email: string, password: string, remember = true): Promise<{ success: boolean; error?: string }> => {
+      setIsLoading(true);
+      setAuthError(null);
 
-    if (remember) {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(authenticatedUser));
-        localStorage.setItem(REMEMBER_KEY, 'true');
-      } catch (e) {
-        console.error('Storage error:', e);
+        const result = await authApi.login({
+          email: email.trim().toLowerCase(),
+          password,
+        });
+
+        tokenStore.setAccessToken(result.tokens.accessToken, result.tokens.expiresIn);
+        tokenStore.setRefreshToken(result.tokens.refreshToken, remember);
+
+        setPractitioner(result.practitioner);
+        setWorkspace(result.workspace);
+        setMembership(result.membership);
+        setUser(mapPractitionerToUser(result.practitioner, result.workspace));
+
+        return { success: true };
+      } catch (err: any) {
+        const msg = err.message || 'Login failed. Please check your credentials.';
+        setAuthError(msg);
+        return { success: false, error: msg };
+      } finally {
+        setIsLoading(false);
       }
-    } else {
+    },
+    []
+  );
+
+  const register = useCallback(
+    async (req: RegisterOwnerRequest, remember = true): Promise<{ success: boolean; error?: string }> => {
+      setIsLoading(true);
+      setAuthError(null);
+
       try {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(authenticatedUser));
-      } catch (e) {
-        console.error('Session storage error:', e);
+        const result = await authApi.register({
+          ...req,
+          email: req.email.trim().toLowerCase(),
+        });
+
+        tokenStore.setAccessToken(result.tokens.accessToken, result.tokens.expiresIn);
+        tokenStore.setRefreshToken(result.tokens.refreshToken, remember);
+
+        setPractitioner(result.practitioner);
+        setWorkspace(result.workspace);
+        setMembership(result.membership);
+        setUser(mapPractitionerToUser(result.practitioner, result.workspace));
+
+        return { success: true };
+      } catch (err: any) {
+        const msg = err.message || 'Registration failed. Please try again.';
+        setAuthError(msg);
+        return { success: false, error: msg };
+      } finally {
+        setIsLoading(false);
       }
-    }
+    },
+    []
+  );
 
-    setIsLoading(false);
-    return { success: true };
-  };
+  const logout = useCallback(async (): Promise<void> => {
+    const rawRefreshToken = tokenStore.getRefreshToken();
+    tokenStore.clear();
 
-  const logout = () => {
+    setPractitioner(null);
+    setWorkspace(null);
+    setMembership(null);
     setUser(null);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(REMEMBER_KEY);
-      sessionStorage.removeItem(STORAGE_KEY);
-    } catch (e) {
-      console.error('Error clearing session:', e);
-    }
-  };
+    setAuthError(null);
 
-  const updateUser = (updatedData: Partial<User>) => {
-    if (!user) return;
-    const updated = { ...user, ...updatedData };
-    setUser(updated);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    } catch (e) {
-      console.error('Failed to update user in storage:', e);
+    // Call backend to revoke the session asynchronously
+    if (rawRefreshToken) {
+      await authApi.logout(rawRefreshToken);
     }
-  };
+  }, []);
+
+  const refreshSession = useCallback(async (): Promise<boolean> => {
+    const refreshToken = tokenStore.getRefreshToken();
+    if (!refreshToken) return false;
+
+    try {
+      const tokens = await authApi.refresh(refreshToken);
+      tokenStore.setAccessToken(tokens.accessToken, tokens.expiresIn);
+      tokenStore.setRefreshToken(tokens.refreshToken);
+
+      const me = await authApi.getMe(tokens.accessToken);
+      setPractitioner(me.practitioner);
+      setWorkspace(me.workspace);
+      setMembership(me.membership);
+      setUser(mapPractitionerToUser(me.practitioner, me.workspace));
+      return true;
+    } catch {
+      await logout();
+      return false;
+    }
+  }, [logout]);
+
+  const updateUser = useCallback(
+    (updatedData: Partial<User>) => {
+      if (!user) return;
+      const updated = { ...user, ...updatedData };
+      setUser(updated);
+    },
+    [user]
+  );
+
+  const role = membership?.role ?? null;
+  const clinicalAuthorized = Boolean(
+    membership &&
+      membership.status === 'active' &&
+      membership.clinical_authorized === true &&
+      (membership.role === 'workspace_owner' || membership.role === 'clinical_practitioner')
+  );
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        isAuthenticated: !!user,
+        practitioner,
+        workspace,
+        membership,
+        role,
+        clinicalAuthorized,
+        isAuthenticated: !!user && !!workspace,
         isLoading,
+        authError,
         login,
+        register,
         logout,
         updateUser,
+        refreshSession,
       }}
     >
       {children}
@@ -142,7 +247,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    return {
+      user: null,
+      practitioner: null,
+      workspace: null,
+      membership: null,
+      role: null,
+      clinicalAuthorized: false,
+      isAuthenticated: false,
+      isLoading: false,
+      authError: null,
+      login: async () => ({ success: false, error: 'Auth provider not found' }),
+      register: async () => ({ success: false, error: 'Auth provider not found' }),
+      logout: async () => {},
+      refreshSession: async () => false,
+      clearAuthError: () => {},
+    };
   }
   return context;
 };

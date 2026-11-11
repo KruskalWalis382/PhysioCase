@@ -24,6 +24,7 @@ const testSuites = [
   'verify-stage13.ts',
   'verify-step2-reassessment.ts',
   'verify-step3-four-tabs.ts',
+  'verify-pre-b7a-frontend-isolation.ts',
 ];
 
 interface SuiteResult {
@@ -39,7 +40,7 @@ let totalPasses = 0;
 let totalFails = 0;
 
 console.log('================================================================');
-console.log('RUNNING ALL 19 PHYSIOCASE VERIFICATION SUITES (B-1 THROUGH B-6)');
+console.log('RUNNING ALL 20 PHYSIOCASE VERIFICATION SUITES (B-1 THROUGH PRE-B7A)');
 console.log('================================================================\n');
 
 for (const suite of testSuites) {
@@ -93,7 +94,7 @@ for (const r of results) {
   console.log(`${paddedSuite} | ${r.status} | Passes: ${String(r.passes).padStart(4)} | Fails: ${r.fails} | ${(r.durationMs / 1000).toFixed(1)}s`);
 }
 console.log('================================================================');
-console.log(`TOTAL SUITES: ${results.length} (19/19)`);
+console.log(`TOTAL SUITES: ${results.length} (20/20)`);
 console.log(`TOTAL CHECKS: ${totalPasses + totalFails}`);
 console.log(`TOTAL PASSED: ${totalPasses}`);
 console.log(`TOTAL FAILED: ${totalFails}`);

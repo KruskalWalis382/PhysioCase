@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from './AuthContext';
 import {
   Patient,
   Case,
@@ -481,6 +482,16 @@ const defaultSettings: AppSettings = {
 export const ClinicalContext = createContext<ClinicalContextType | undefined>(undefined);
 
 export const ClinicalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  let authContext: any = null;
+  try {
+    authContext = useAuth();
+  } catch {
+    // Standalone fallback if rendered outside AuthProvider
+  }
+  const workspace = authContext?.workspace ?? null;
+  const user = authContext?.user ?? null;
+  const activeWorkspaceId = workspace?.id ?? null;
+
   // Start with saved patients or empty state, ensuring patientNumber is backfilled safely
   const [patients, setPatients] = useState<Patient[]>(() => {
     try {
@@ -842,256 +853,371 @@ export const ClinicalProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isEditPatientModalOpen, setIsEditPatientModalOpen] = useState(false);
   const [activePatientForEdit, setActivePatientForEdit] = useState<Patient | null>(null);
 
+  // Track workspace transitions to reset or rehydrate clinical state safely
+  const prevWorkspaceIdRef = useRef<string | null>(activeWorkspaceId);
+
   useEffect(() => {
+    if (activeWorkspaceId === prevWorkspaceIdRef.current) return;
+    prevWorkspaceIdRef.current = activeWorkspaceId;
+
+    // Reset navigation and drill-down state on any workspace transition or logout
+    setSelectedPatientId(null);
+    setSelectedCaseId(null);
+    setActiveAssessmentCaseId(null);
+
+    if (!activeWorkspaceId) {
+      // Unauthenticated or logged out: clear all clinical data from memory completely
+      setPatients([]);
+      setCases([]);
+      setSubjectiveAssessments([]);
+      setClinicalThreads([]);
+      setObjectiveAssessments([]);
+      setClinicalProblems([]);
+      setClinicalGoals([]);
+      setTreatmentPlans([]);
+      setTreatmentSelections([]);
+      setTreatmentEvidenceLinks([]);
+      setTreatmentConditionLinks([]);
+      setEvidenceSources(INITIAL_EVIDENCE_SOURCES);
+      setEvidenceItems(INITIAL_EVIDENCE_ITEMS);
+      setConditionPresentations(INITIAL_CONDITION_PRESENTATIONS);
+      setConditionEvidenceLinks(INITIAL_CONDITION_EVIDENCE_LINKS);
+      setClinicalInvestigations([]);
+      setClinicalSessions([]);
+      setSessionTreatmentDeliveries([]);
+      setOutcomeMeasureDefinitions(INITIAL_OUTCOME_MEASURE_DEFINITIONS);
+      setProgressRecords([]);
+      setProgressMeasurements([]);
+      setCaseDischargeRecords([]);
+      setAuditEvents([]);
+      return;
+    }
+
+    // Authenticated workspace: load partitioned clinical dataset
+    const loadPartition = <T,>(key: string, fallback: T): T => {
+      try {
+        const item = localStorage.getItem(`physiocase_ws_${activeWorkspaceId}_${key}`);
+        if (!item) return fallback;
+        return JSON.parse(item);
+      } catch {
+        return fallback;
+      }
+    };
+
+    setPatients(loadPartition('patients', []));
+    setCases(loadPartition('cases', []));
+    setSubjectiveAssessments(loadPartition('subjective_assessments', []));
+    setClinicalThreads(loadPartition('clinical_threads', []));
+    setObjectiveAssessments(loadPartition('objective_assessments', []));
+    setClinicalProblems(loadPartition('clinical_problems', []));
+    setClinicalGoals(loadPartition('clinical_goals', []));
+    setTreatmentPlans(loadPartition('treatment_plans', []));
+    setTreatmentSelections(loadPartition('treatment_selections', []));
+    setTreatmentEvidenceLinks(loadPartition('treatment_evidence_links', []));
+    setTreatmentConditionLinks(loadPartition('treatment_condition_links', []));
+    setEvidenceSources(loadPartition('evidence_sources', INITIAL_EVIDENCE_SOURCES));
+    setEvidenceItems(loadPartition('evidence_items', INITIAL_EVIDENCE_ITEMS));
+    setConditionPresentations(loadPartition('condition_presentations', INITIAL_CONDITION_PRESENTATIONS));
+    setConditionEvidenceLinks(loadPartition('condition_evidence_links', INITIAL_CONDITION_EVIDENCE_LINKS));
+    setClinicalInvestigations(loadPartition('clinical_investigations', []));
+    setClinicalSessions(loadPartition('clinical_sessions', []));
+    setSessionTreatmentDeliveries(loadPartition('session_treatment_deliveries', []));
+    setOutcomeMeasureDefinitions(loadPartition('outcome_measure_definitions', INITIAL_OUTCOME_MEASURE_DEFINITIONS));
+    setProgressRecords(loadPartition('progress_records', []));
+    setProgressMeasurements(loadPartition('progress_measurements', []));
+    setCaseDischargeRecords(loadPartition('case_discharge_records', []));
+    setAuditEvents(loadPartition('audit_events', []));
+
+    const savedSettings = loadPartition<AppSettings | null>('settings', null);
+    if (savedSettings) {
+      setSettings(savedSettings);
+    } else if (user) {
+      setSettings({
+        ...defaultSettings,
+        practitionerName: user.name,
+        credentials: user.title,
+        clinicName: user.clinicName,
+        licenseNumber: user.registrationNumber || defaultSettings.licenseNumber,
+        email: user.email,
+      });
+    }
+  }, [activeWorkspaceId, user]);
+
+  // Synchronize state changes to active workspace partitioned storage
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
-      localStorage.setItem(PATIENTS_STORAGE_KEY, JSON.stringify(patients));
+      localStorage.setItem(`physiocase_ws_${activeWorkspaceId}_patients`, JSON.stringify(patients));
     } catch (e) {
       console.error('Failed to save patients:', e);
     }
-  }, [patients]);
+  }, [patients, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
-      localStorage.setItem(CASES_STORAGE_KEY, JSON.stringify(cases));
+      localStorage.setItem(`physiocase_ws_${activeWorkspaceId}_cases`, JSON.stringify(cases));
     } catch (e) {
       console.error('Failed to save cases:', e);
     }
-  }, [cases]);
+  }, [cases, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        SUBJECTIVE_ASSESSMENTS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_subjective_assessments`,
         JSON.stringify(subjectiveAssessments)
       );
     } catch (e) {
       console.error('Failed to save subjective assessments:', e);
     }
-  }, [subjectiveAssessments]);
+  }, [subjectiveAssessments, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CLINICAL_THREADS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_clinical_threads`,
         JSON.stringify(clinicalThreads)
       );
     } catch (e) {
       console.error('Failed to save clinical threads:', e);
     }
-  }, [clinicalThreads]);
+  }, [clinicalThreads, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        OBJECTIVE_ASSESSMENTS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_objective_assessments`,
         JSON.stringify(objectiveAssessments)
       );
     } catch (e) {
       console.error('Failed to save objective assessments:', e);
     }
-  }, [objectiveAssessments]);
+  }, [objectiveAssessments, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CLINICAL_PROBLEMS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_clinical_problems`,
         JSON.stringify(clinicalProblems)
       );
     } catch (e) {
       console.error('Failed to save clinical problems:', e);
     }
-  }, [clinicalProblems]);
+  }, [clinicalProblems, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CLINICAL_GOALS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_clinical_goals`,
         JSON.stringify(clinicalGoals)
       );
     } catch (e) {
       console.error('Failed to save clinical goals:', e);
     }
-  }, [clinicalGoals]);
+  }, [clinicalGoals, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        TREATMENT_PLANS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_treatment_plans`,
         JSON.stringify(treatmentPlans)
       );
     } catch (e) {
       console.error('Failed to save treatment plans:', e);
     }
-  }, [treatmentPlans]);
+  }, [treatmentPlans, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        TREATMENT_SELECTIONS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_treatment_selections`,
         JSON.stringify(treatmentSelections)
       );
     } catch (e) {
       console.error('Failed to save treatment selections:', e);
     }
-  }, [treatmentSelections]);
+  }, [treatmentSelections, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        TREATMENT_EVIDENCE_LINKS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_treatment_evidence_links`,
         JSON.stringify(treatmentEvidenceLinks)
       );
     } catch (e) {
       console.error('Failed to save treatment evidence links:', e);
     }
-  }, [treatmentEvidenceLinks]);
+  }, [treatmentEvidenceLinks, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        TREATMENT_CONDITION_LINKS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_treatment_condition_links`,
         JSON.stringify(treatmentConditionLinks)
       );
     } catch (e) {
       console.error('Failed to save treatment condition links:', e);
     }
-  }, [treatmentConditionLinks]);
+  }, [treatmentConditionLinks, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        EVIDENCE_SOURCES_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_evidence_sources`,
         JSON.stringify(evidenceSources)
       );
     } catch (e) {
       console.error('Failed to save evidence sources:', e);
     }
-  }, [evidenceSources]);
+  }, [evidenceSources, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        EVIDENCE_ITEMS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_evidence_items`,
         JSON.stringify(evidenceItems)
       );
     } catch (e) {
       console.error('Failed to save evidence items:', e);
     }
-  }, [evidenceItems]);
+  }, [evidenceItems, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CONDITION_PRESENTATIONS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_condition_presentations`,
         JSON.stringify(conditionPresentations)
       );
     } catch (e) {
       console.error('Failed to save condition presentations:', e);
     }
-  }, [conditionPresentations]);
+  }, [conditionPresentations, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CONDITION_EVIDENCE_LINKS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_condition_evidence_links`,
         JSON.stringify(conditionEvidenceLinks)
       );
     } catch (e) {
       console.error('Failed to save condition evidence links:', e);
     }
-  }, [conditionEvidenceLinks]);
+  }, [conditionEvidenceLinks, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
-      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+      localStorage.setItem(`physiocase_ws_${activeWorkspaceId}_settings`, JSON.stringify(settings));
     } catch (e) {
       console.error('Failed to save settings:', e);
     }
-  }, [settings]);
+  }, [settings, activeWorkspaceId]);
 
   // Stage 5: Sync Clinical Sessions & Deliveries to LocalStorage
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CLINICAL_SESSIONS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_clinical_sessions`,
         JSON.stringify(clinicalSessions)
       );
     } catch (e) {
       console.error('Failed to save clinical sessions:', e);
     }
-  }, [clinicalSessions]);
+  }, [clinicalSessions, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        SESSION_TREATMENT_DELIVERIES_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_session_treatment_deliveries`,
         JSON.stringify(sessionTreatmentDeliveries)
       );
     } catch (e) {
       console.error('Failed to save session treatment deliveries:', e);
     }
-  }, [sessionTreatmentDeliveries]);
+  }, [sessionTreatmentDeliveries, activeWorkspaceId]);
 
   // Stage 6: Sync Clinical Progress & Outcomes to LocalStorage
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        OUTCOME_MEASURE_DEFINITIONS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_outcome_measure_definitions`,
         JSON.stringify(outcomeMeasureDefinitions)
       );
     } catch (e) {
       console.error('Failed to save outcome measure definitions:', e);
     }
-  }, [outcomeMeasureDefinitions]);
+  }, [outcomeMeasureDefinitions, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        PROGRESS_RECORDS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_progress_records`,
         JSON.stringify(progressRecords)
       );
     } catch (e) {
       console.error('Failed to save progress records:', e);
     }
-  }, [progressRecords]);
+  }, [progressRecords, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        PROGRESS_MEASUREMENTS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_progress_measurements`,
         JSON.stringify(progressMeasurements)
       );
     } catch (e) {
       console.error('Failed to save progress measurements:', e);
     }
-  }, [progressMeasurements]);
+  }, [progressMeasurements, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CASE_DISCHARGE_RECORDS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_case_discharge_records`,
         JSON.stringify(caseDischargeRecords)
       );
     } catch (e) {
       console.error('Failed to save case discharge records:', e);
     }
-  }, [caseDischargeRecords]);
+  }, [caseDischargeRecords, activeWorkspaceId]);
 
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
       localStorage.setItem(
-        CLINICAL_INVESTIGATIONS_STORAGE_KEY,
+        `physiocase_ws_${activeWorkspaceId}_clinical_investigations`,
         JSON.stringify(clinicalInvestigations)
       );
     } catch (e) {
       console.error('Failed to save clinical investigations:', e);
     }
-  }, [clinicalInvestigations]);
+  }, [clinicalInvestigations, activeWorkspaceId]);
 
   // Stage 13: Persistent Audit Events sync with Transient Retry Queue & Warning
   useEffect(() => {
+    if (!activeWorkspaceId) return;
     try {
-      localStorage.setItem(AUDIT_EVENTS_STORAGE_KEY, JSON.stringify(auditEvents));
+      localStorage.setItem(`physiocase_ws_${activeWorkspaceId}_audit_events`, JSON.stringify(auditEvents));
       if (globalAuditRetryQueue.length > 0) {
         globalAuditRetryQueue.clear();
       }
@@ -1108,21 +1234,12 @@ export const ClinicalProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         `Audit storage warning: localStorage write failed (${e?.message || 'Storage quota exceeded'}). ${globalAuditRetryQueue.length} event(s) held in transient retry queue.`
       );
     }
-  }, [auditEvents]);
+  }, [auditEvents, activeWorkspaceId]);
 
   // Stage 13: Actor Resolution & Append-Only Audit Event Dispatcher
   const getCurrentActor = useCallback((): AuditActor => {
-    let currentUser: User | null = null;
-    try {
-      const sessionStr = localStorage.getItem('physiocase_session_user');
-      if (sessionStr) {
-        currentUser = JSON.parse(sessionStr);
-      }
-    } catch {
-      // fallback
-    }
-    return resolveAuditActor(currentUser, settings.practitionerName);
-  }, [settings.practitionerName]);
+    return resolveAuditActor(user || null, settings.practitionerName);
+  }, [user, settings.practitionerName]);
 
   const appendAuditEvent = useCallback(
     (

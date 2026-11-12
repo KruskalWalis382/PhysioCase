@@ -17,13 +17,19 @@ export async function getDb(options?: DatabaseClientOptions): Promise<PGlite> {
     globalDb = null;
   }
 
-  if (!globalDb) {
-    if (options?.dataDir) {
-      globalDb = new PGlite(options.dataDir);
-    } else {
-      globalDb = new PGlite();
-    }
+if (!globalDb) {
+  const db = options?.dataDir
+    ? new PGlite(options.dataDir)
+    : new PGlite();
+
+  try {
+    await db.waitReady;
+    globalDb = db;
+  } catch (error) {
+    await db.close().catch(() => {});
+    throw error;
   }
+}
 
   return globalDb;
 }
